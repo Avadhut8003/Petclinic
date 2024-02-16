@@ -1,82 +1,64 @@
 pipeline {
-    agent any 
-    
-    tools{
-        jdk 'jdk11'
-        maven 'maven3'
+  agent any 
+  tools {
+    maven 'maven'
+  }
+  stages {
+    stage ('Initialize') {
+      steps {
+        sh '''
+                    echo "PATH = ${PATH}"
+                    echo "M2_HOME = ${M2_HOME}"
+            ''' 
+      }
     }
-    
-    environment {
-        SCANNER_HOME=tool 'sonar-scanner'
-    }
-    
-    stages{
-        
-        stage("Git Checkout"){
-            steps{
-                git branch: 'main', changelog: false, poll: false, url: 'https://github.com/jaiswaladi246/Petclinic.git'
-            }
-        }
-        
-        stage("Compile"){
-            steps{
-                sh "mvn clean compile"
-            }
-        }
-        
-         stage("Test Cases"){
-            steps{
-                sh "mvn test"
-            }
-        }
-        
-        stage("Sonarqube Analysis "){
-            steps{
-                withSonarQubeEnv('sonar-server') {
-                    sh ''' $SCANNER_HOME/bin/sonar-scanner -Dsonar.projectName=Petclinic \
-                    -Dsonar.java.binaries=. \
-                    -Dsonar.projectKey=Petclinic '''
-    
-                }
-            }
-        }
-        
-        stage("OWASP Dependency Check"){
-            steps{
-                dependencyCheck additionalArguments: '--scan ./ --format HTML ', odcInstallation: 'DP'
-                dependencyCheckPublisher pattern: '**/dependency-check-report.xml'
-            }
-        }
-        
-         stage("Build"){
-            steps{
-                sh " mvn clean install"
-            }
-        }
-        
-        stage("Docker Build & Push"){
-            steps{
-                script{
-                   withDockerRegistry(credentialsId: '58be877c-9294-410e-98ee-6a959d73b352', toolName: 'docker') {
-                        
-                        sh "docker build -t image1 ."
-                        sh "docker tag image1 adijaiswal/pet-clinic123:latest "
-                        sh "docker push adijaiswal/pet-clinic123:latest "
-                    }
-                }
-            }
-        }
-        
-        stage("TRIVY"){
-            steps{
-                sh " trivy image adijaiswal/pet-clinic123:latest"
-            }
-        }
-        
-        stage("Deploy To Tomcat"){
-            steps{
-                sh "cp  /var/lib/jenkins/workspace/CI-CD/target/petclinic.war /opt/apache-tomcat-9.0.65/webapps/ "
-            }
-        }
-    }
+stage ('Check-git-Secrets') {
+  steps {
+      sh 'rm trufflehog || true'
+      sh 'docker run gesellix/trufflehog --json https://github.com/Avadhut8003/Petclinic.git > trufflehog'
+      sh 'cat trufflehog'
+  }
 }
+stage ('Sorce Code Analysis') {
+  steps {
+      sh 'rm owasp* || true'
+      sh 'wget https://raw.githubusercontent.com/Avadhut8003/Petclinic/master/owasp-dependency-check.sh'
+      sh 'chmod +x owasp-dependency-check.sh'
+      sh 'bash owasp-dependency-check.sh'
+      sh 'cat /var/lib/jenkins/OWASP-Dependency-Check/reports/dependency-check-report.xml'
+  }
+}
+    stage ('SAST') {
+      steps {
+          withSonarQubeEnv('sonar') {
+           sh 'mvn sonar:sonar'
+           sh 'cat target/sonar/report-task.txt'
+          }
+        }
+      }
+
+   stage ('Build') {
+      steps {
+      sh 'mvn clean package'
+    }
+   }
+  stage ('Deplpoy to Tomcat') {
+      steps {
+      sshagent (['tomcat']) {
+        sh 'scp -o ConnectTimeout=60 -o StrictHostKeyChecking=no target/Petclinic-0.0.1-SNAPSHOT.war ubuntu@3.108.190.222:/prod/apache-tomcat-10.1.18/webapps/Petclinic.war'
+      }
+    }
+   }
+    stage ('DAST') {
+   steps {
+      sshagent (['zap']) {
+        sh 'ssh -o StrictHostKeyChecking=no ubuntu@65.0.100.69 "docker run -t owasp/zap2docker-stable zap-baseline.py -t http://3.108.190.222:8080/webapp/" || true'
+      }
+   }
+ }  
+  }
+}
+  
+    
+    
+   
